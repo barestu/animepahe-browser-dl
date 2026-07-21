@@ -1,5 +1,6 @@
 import type { Audio, Episode, KwikSource, Quality } from './types';
 import type { Fetcher } from './tab-fetch';
+import { decodeEntities } from './html';
 
 // animepahe sits behind Cloudflare; the cf_clearance cookie is SameSite=Lax so it only rides
 // FIRST-PARTY requests. All animepahe fetches therefore run inside the animepahe tab via an
@@ -27,8 +28,12 @@ export async function getAnimeTitle(
 ): Promise<string> {
   const html = await fetchText(`${base(domain)}/anime/${animeSession}`);
   const m = html.match(/<title>\s*(.*?)\s*(?:::|\||<\/title>)/i);
-  const raw = m?.[1] ?? 'Unknown';
-  return raw.replace(/\s*anime info.*$/i, '').trim();
+  const raw = decodeEntities(m?.[1] ?? 'Unknown');
+  return raw
+    .replace(/\s*anime info.*$/i, '')
+    .replace(/\s*\bEp\.?\s.*$/i, '') // drop "Ep. 1-13 [Completed]" and anything after
+    .replace(/\s*\[[^\]]*\]\s*$/, '') // drop any trailing [status] bracket
+    .trim();
 }
 
 /** Fetch every episode (paginates the release API). */
