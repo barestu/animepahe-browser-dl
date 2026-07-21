@@ -3,10 +3,10 @@
   import { getAnimeTitle, getEpisodeList, fetchPlayPage, pickSource } from '@/lib/animepahe';
   import { tabFetcher, type Fetcher } from '@/lib/tab-fetch';
   import { logsToText, remoteLogger } from '@/lib/logger';
-
-  const plog = remoteLogger('popup');
   import type { AppState, Audio, Episode, Job, LogEntry, Pick, Quality, Settings } from '@/lib/types';
   import { DEFAULT_SETTINGS } from '@/lib/types';
+
+  const plog = remoteLogger('popup');
 
   let loading = true;
   let error = '';
@@ -114,7 +114,7 @@
         plog(`resolve failed ep ${ep.episodeNumber}`, reason);
         missed.push(`${ep.episodeNumber} (${reason})`);
       }
-      await new Promise((r) => setTimeout(r, 150)); // be gentle on animepahe
+      await new Promise((r) => setTimeout(r, 400)); // be gentle on animepahe (rate-limits bursts)
     }
     if (picks.length) await send({ type: 'enqueue', picks });
     error = missed.length ? `Could not resolve: ${missed.join(', ')}` : '';
