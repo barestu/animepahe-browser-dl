@@ -1,0 +1,29 @@
+{
+  "name": "animepahe-browser-dl",
+  "version": "0.1.0",
+  "description": "Batch-download anime episodes from an open animepahe page (Chrome MV3 extension)",
+  "type": "module",
+  "scripts": {
+    "copy:ffmpeg": "node scripts/copy-ffmpeg.mjs",
+    "dev": "pnpm copy:ffmpeg && vite",
+    "build": "pnpm copy:ffmpeg && tsc --noEmit && vite build",
+    "check": "svelte-check --tsconfig ./tsconfig.json"
+  },
+  "devDependencies": {
+    "@crxjs/vite-plugin": "^2.0.0",
+    "@sveltejs/vite-plugin-svelte": "^3.1.2",
+    "@tsconfig/svelte": "^5.0.4",
+    "@types/chrome": "^0.0.278",
+    "@types/node": "^22.7.5",
+    "svelte": "^4.2.19",
+    "svelte-check": "^3.8.6",
+    "tslib": "^2.7.0",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10"
+  },
+  "dependencies": {
+    "@ffmpeg/core": "^0.12.6",
+    "@ffmpeg/ffmpeg": "^0.12.10",
+    "@ffmpeg/util": "^0.12.1"
+  }
+}
