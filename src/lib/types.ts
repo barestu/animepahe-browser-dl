@@ -31,12 +31,21 @@ export interface Job {
   episode: Episode;
   quality: Quality;
   audio: Audio;
+  kwikUrl: string; // resolved in the popup (first-party) at enqueue time
   stage: JobStage;
   segTotal: number;
   segDone: number;
   attempts: number;
   error?: string;
   filename?: string;
+}
+
+/** A fully-resolved download request handed from popup to service worker. */
+export interface Pick {
+  episode: Episode;
+  quality: Quality;
+  audio: Audio;
+  kwikUrl: string;
 }
 
 export interface Settings {
@@ -55,7 +64,7 @@ export const DEFAULT_SETTINGS: Settings = {
   audio: 'jpn',
   filenameTemplate: 'Anime/{title}/{title} - {episode} [{quality}p].mp4',
   useCustomFolder: false,
-  segmentConcurrency: 6,
+  segmentConcurrency: 3,
   maxRetries: 3,
 };
 
@@ -64,7 +73,7 @@ export const DEFAULT_SETTINGS: Settings = {
 // popup -> service worker
 export type PopupMsg =
   | { type: 'getState' }
-  | { type: 'enqueue'; episodes: Episode[]; quality: Quality; audio: Audio }
+  | { type: 'enqueue'; picks: Pick[] }
   | { type: 'retry'; jobId: string }
   | { type: 'cancelAll' }
   | { type: 'getSettings' }

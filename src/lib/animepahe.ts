@@ -1,7 +1,9 @@
 import type { Audio, Episode, KwikSource, Quality } from './types';
+import type { Fetcher } from './tab-fetch';
 
-// All animepahe fetches use credentials:'include' so the browser's existing cf_clearance
-// cookie rides along (user already passed the Cloudflare challenge in their tab). See SPEC.
+// animepahe sits behind Cloudflare; the cf_clearance cookie is SameSite=Lax so it only rides
+// FIRST-PARTY requests. All animepahe fetches therefore run inside the animepahe tab via an
+// injected Fetcher (see tab-fetch.ts), never a cross-site fetch from the extension. See SPEC.
 
 interface ReleaseItem {
   session: string; // episode session
@@ -18,9 +20,12 @@ function base(domain: string): string {
 }
 
 /** Pull the anime title from the /anime/<session> page <title>. */
-export async function getAnimeTitle(domain: string, animeSession: string): Promise<string> {
-  const res = await fetch(`${base(domain)}/anime/${animeSession}`, { credentials: 'include' });
-  const html = await res.text();
+export async function getAnimeTitle(
+  fetchText: Fetcher,
+  domain: string,
+  animeSession: string,
+): Promise<string> {
+  const html = await fetchText(`${base(domain)}/anime/${animeSession}`);
   const m = html.match(/<title>\s*(.*?)\s*(?:::|\||<\/title>)/i);
   const raw = m?.[1] ?? 'Unknown';
   return raw.replace(/\s*anime info.*$/i, '').trim();
@@ -28,6 +33,7 @@ export async function getAnimeTitle(domain: string, animeSession: string): Promi
 
 /** Fetch every episode (paginates the release API). */
 export async function getEpisodeList(
+  fetchText: Fetcher,
   domain: string,
   animeSession: string,
   title: string,
@@ -38,9 +44,14 @@ export async function getEpisodeList(
 
   do {
     const url = `${base(domain)}/api?m=release&id=${animeSession}&sort=episode_asc&page=${page}`;
-    const res = await fetch(url, { credentials: 'include' });
-    if (!res.ok) throw new Error(`release API ${res.status}`);
-    const json = (await res.json()) as ReleaseResponse;
+    const text = await fetchText(url);
+    if (text.trimStart().startsWith('<')) {
+      throw new Error(
+        `API returned HTML, not JSON (domain ${domain}). Likely a Cloudflare page — ` +
+          `make sure the tab has fully loaded past any Cloudflare check.`,
+      );
+    }
+    const json = JSON.parse(text) as ReleaseResponse;
     lastPage = json.last_page ?? 1;
     for (const item of json.data ?? []) {
       out.push({
@@ -81,15 +92,13 @@ export function parsePlaySources(html: string): KwikSource[] {
 }
 
 export async function fetchPlayPage(
+  fetchText: Fetcher,
   domain: string,
   animeSession: string,
   episodeSession: string,
 ): Promise<KwikSource[]> {
-  const res = await fetch(`${base(domain)}/play/${animeSession}/${episodeSession}`, {
-    credentials: 'include',
-  });
-  if (!res.ok) throw new Error(`play page ${res.status}`);
-  return parsePlaySources(await res.text());
+  const html = await fetchText(`${base(domain)}/play/${animeSession}/${episodeSession}`);
+  return parsePlaySources(html);
 }
 
 /** Pick the best source for a target quality/audio, falling back to nearest quality. */

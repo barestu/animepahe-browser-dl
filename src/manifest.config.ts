@@ -42,7 +42,7 @@ export default defineManifest({
   },
   web_accessible_resources: [
     {
-      resources: ['assets/*'],
+      resources: ['assets/*', 'ffmpeg/*'],
       matches: ['<all_urls>'],
     },
   ],

@@ -51,10 +51,23 @@ export function parseM3u8(text: string, m3u8Url: string): Playlist {
   return { segmentUrls, key };
 }
 
-async function fetchBytes(url: string): Promise<Uint8Array> {
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// Retry on rate-limit / transient CDN errors with exponential backoff (honoring Retry-After).
+async function fetchBytes(url: string, attempt = 0): Promise<Uint8Array> {
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`fetch ${url} -> ${res.status}`);
-  return new Uint8Array(await res.arrayBuffer());
+  if (res.ok) return new Uint8Array(await res.arrayBuffer());
+
+  const retryable = res.status === 429 || res.status === 503 || res.status === 502;
+  if (retryable && attempt < 6) {
+    const retryAfter = Number(res.headers.get('retry-after'));
+    const backoff = Number.isFinite(retryAfter) && retryAfter > 0
+      ? retryAfter * 1000
+      : Math.min(1000 * 2 ** attempt, 15_000) + Math.floor(attempt * 250);
+    await sleep(backoff);
+    return fetchBytes(url, attempt + 1);
+  }
+  throw new Error(`fetch ${url} -> ${res.status}`);
 }
 
 async function importKey(raw: Uint8Array): Promise<CryptoKey> {

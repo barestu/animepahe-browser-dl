@@ -1,11 +1,10 @@
 // Orchestrator. Owns queue, DNR rules, offscreen lifecycle, kwik m3u8 sniffing, and downloads.
 // Offscreen can only use chrome.runtime, so ALL chrome.* API work happens here (SPEC).
 
-import { fetchPlayPage, pickSource } from '@/lib/animepahe';
 import { loadSettings, saveSettings } from '@/lib/settings';
 import { buildFilename } from '@/lib/naming';
-import type { Episode, Job, OffscreenReply, PopupMsg, Quality, Audio } from '@/lib/types';
-import { enableRefererRule, disableRefererRule } from './dnr';
+import type { Episode, Job, OffscreenReply, Pick, PopupMsg } from '@/lib/types';
+import { enableKwikNavRule, setCdnRefererRule, disableAllRules } from './dnr';
 import { ensureOffscreen, closeOffscreen } from './offscreen';
 import { resolveM3u8 } from './kwik';
 import * as store from './queue-store';
@@ -41,7 +40,7 @@ async function handlePopup(msg: PopupMsg): Promise<unknown> {
       await saveSettings(msg.settings);
       return { ok: true };
     case 'enqueue':
-      await enqueue(msg.episodes, msg.quality, msg.audio);
+      await enqueue(msg.picks);
       void runLoop();
       return { ok: true };
     case 'retry':
@@ -70,12 +69,13 @@ function handleOffscreenReply(reply: OffscreenReply): void {
 
 // ---- queue building ----
 
-async function enqueue(episodes: Episode[], quality: Quality, audio: Audio): Promise<void> {
-  const jobs: Job[] = episodes.map((ep) => ({
-    id: jobId(ep, quality, audio),
-    episode: ep,
-    quality,
-    audio,
+async function enqueue(picks: Pick[]): Promise<void> {
+  const jobs: Job[] = picks.map((p) => ({
+    id: jobId(p.episode, p.quality, p.audio),
+    episode: p.episode,
+    quality: p.quality,
+    audio: p.audio,
+    kwikUrl: p.kwikUrl,
     stage: 'queued',
     segTotal: 0,
     segDone: 0,
@@ -91,7 +91,7 @@ async function runLoop(): Promise<void> {
   looping = true;
   const settings = await loadSettings();
   await store.setRunning(true);
-  await enableRefererRule(settings.animepaheDomain);
+  await enableKwikNavRule(settings.animepaheDomain);
   await ensureOffscreen();
 
   try {
@@ -100,7 +100,7 @@ async function runLoop(): Promise<void> {
       await runJob(job, settings.animepaheDomain, settings.filenameTemplate, settings.segmentConcurrency, settings.maxRetries);
     }
   } finally {
-    await disableRefererRule();
+    await disableAllRules();
     await closeOffscreen();
     await store.setRunning(false);
     looping = false;
@@ -109,24 +109,23 @@ async function runLoop(): Promise<void> {
 
 async function runJob(
   job: Job,
-  domain: string,
+  animepaheDomain: string,
   template: string,
   concurrency: number,
   maxRetries: number,
 ): Promise<void> {
   try {
-    // 1. resolve the kwik link for the requested quality/audio
+    // 1. sniff the m3u8 by loading the (already-resolved) kwik link in a background tab
     await store.patchJob(job.id, { stage: 'extracting' });
-    const sources = await fetchPlayPage(domain, job.episode.animeSession, job.episode.episodeSession);
-    const source = pickSource(sources, job.quality, job.audio);
-    if (!source) throw new Error('no matching quality source on play page');
+    const m3u8Url = await resolveM3u8(job.kwikUrl);
 
-    // 2. sniff the m3u8 by loading kwik in a background tab
-    const m3u8Url = await resolveM3u8(source.kwikUrl);
+    // 2. point CDN fetches at THIS job's kwik origin (owocdn validates the embedding host)
+    await setCdnRefererRule(new URL(job.kwikUrl).origin, animepaheDomain);
 
     // 3. hand off to offscreen for fetch+decrypt+mux; await the blob URL
+    // clamp concurrency: owocdn rate-limits (429) above a few parallel connections
     await store.patchJob(job.id, { stage: 'downloading' });
-    const blobUrl = await requestBlob(job.id, m3u8Url, concurrency);
+    const blobUrl = await requestBlob(job.id, m3u8Url, Math.min(concurrency, 4));
 
     // 4. download from the service worker (offscreen can't use chrome.downloads)
     await store.patchJob(job.id, { stage: 'saving' });

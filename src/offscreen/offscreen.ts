@@ -3,11 +3,12 @@
 // hand the blob URL to the service worker, which performs chrome.downloads.download.
 
 import { FFmpeg } from '@ffmpeg/ffmpeg';
-import { toBlobURL } from '@ffmpeg/util';
 import { assembleTs } from '@/lib/hls';
 
 // Single-thread core shipped as a static asset in public/ffmpeg (copied at build time — no
-// remote code, MV3-compliant). toBlobURL wraps them so the ffmpeg worker can import them.
+// remote code, MV3-compliant). Pass the chrome-extension:// URLs DIRECTLY (not blob URLs):
+// the ffmpeg worker does `import(coreURL)`, and MV3 CSP script-src forbids blob: but allows
+// 'self' (the extension origin). See SPEC "ffmpeg".
 const coreURL = chrome.runtime.getURL('ffmpeg/ffmpeg-core.js');
 const wasmURL = chrome.runtime.getURL('ffmpeg/ffmpeg-core.wasm');
 import type { OffscreenMsg, OffscreenReply } from '@/lib/types';
@@ -19,10 +20,7 @@ let ffmpeg: FFmpeg | null = null;
 async function getFfmpeg(): Promise<FFmpeg> {
   if (ffmpeg) return ffmpeg;
   const instance = new FFmpeg();
-  await instance.load({
-    coreURL: await toBlobURL(coreURL, 'text/javascript'),
-    wasmURL: await toBlobURL(wasmURL, 'application/wasm'),
-  });
+  await instance.load({ coreURL, wasmURL });
   ffmpeg = instance;
   return instance;
 }

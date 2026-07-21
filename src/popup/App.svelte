@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getAnimeTitle, getEpisodeList } from '@/lib/animepahe';
-  import type { AppState, Audio, Episode, Job, Quality, Settings } from '@/lib/types';
+  import { getAnimeTitle, getEpisodeList, fetchPlayPage, pickSource } from '@/lib/animepahe';
+  import { tabFetcher, type Fetcher } from '@/lib/tab-fetch';
+  import type { AppState, Audio, Episode, Job, Pick, Quality, Settings } from '@/lib/types';
   import { DEFAULT_SETTINGS } from '@/lib/types';
 
   let loading = true;
@@ -15,6 +16,10 @@
   let state: AppState = { jobs: [], running: false };
   let settings: Settings = DEFAULT_SETTINGS;
   let showSettings = false;
+  let tabId = -1;
+  let domain = '';
+  let fetchText: Fetcher = async () => '';
+  let resolving = false;
 
   const send = (msg: unknown) => chrome.runtime.sendMessage(msg);
 
@@ -36,12 +41,21 @@
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       const session = parseAnimeSession(tab?.url);
-      if (!session) {
+      if (!session || tab?.id == null) {
         error = 'Open an animepahe anime page (…/anime/…) then reopen this popup.';
         return;
       }
-      title = await getAnimeTitle(settings.animepaheDomain, session);
-      episodes = await getEpisodeList(settings.animepaheDomain, session, title);
+      tabId = tab.id;
+      // Use the domain of the tab the user is actually on (e.g. animepahe.pw). All animepahe
+      // fetches run first-party inside this tab so the SameSite=Lax cf_clearance cookie is sent.
+      domain = new URL(tab.url!).hostname;
+      fetchText = tabFetcher(tabId);
+      if (domain !== settings.animepaheDomain) {
+        settings = { ...settings, animepaheDomain: domain };
+        await send({ type: 'saveSettings', settings });
+      }
+      title = await getAnimeTitle(fetchText, domain, session);
+      episodes = await getEpisodeList(fetchText, domain, session, title);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -78,10 +92,28 @@
   }
 
   async function download() {
-    const picks = episodes.filter((e) => selected.has(e.episodeSession));
-    if (picks.length === 0) return;
-    await send({ type: 'enqueue', episodes: picks, quality, audio });
-    selectNone();
+    const chosen = episodes.filter((e) => selected.has(e.episodeSession));
+    if (chosen.length === 0) return;
+    resolving = true;
+    error = '';
+    const picks: Pick[] = [];
+    const missed: string[] = [];
+    try {
+      // Resolve each episode's kwik link first-party here; the SW can't fetch animepahe.
+      for (const ep of chosen) {
+        const sources = await fetchPlayPage(fetchText, domain, ep.animeSession, ep.episodeSession);
+        const src = pickSource(sources, quality, audio);
+        if (src) picks.push({ episode: ep, quality: src.quality, audio: src.audio, kwikUrl: src.kwikUrl });
+        else missed.push(ep.episodeNumber);
+      }
+      if (picks.length) await send({ type: 'enqueue', picks });
+      if (missed.length) error = `No source found for episode(s): ${missed.join(', ')}`;
+      selectNone();
+    } catch (e) {
+      error = `Resolve failed: ${e instanceof Error ? e.message : String(e)}`;
+    } finally {
+      resolving = false;
+    }
   }
 
   async function saveSettings() {
@@ -90,9 +122,13 @@
   }
 
   const pct = (j: Job) => (j.segTotal ? Math.round((j.segDone / j.segTotal) * 100) : j.stage === 'done' ? 100 : 0);
+  const buildInfo = `v${__APP_VERSION__} · built ${__BUILD_TIME__}`;
 </script>
 
-<h1>Animepahe Batch Downloader</h1>
+<div class="row" style="justify-content:space-between;align-items:baseline">
+  <h1>Animepahe Batch Downloader</h1>
+  <span class="muted" style="font-size:10px" title="build version + timestamp">{buildInfo}</span>
+</div>
 
 {#if showSettings}
   <div>
@@ -142,7 +178,9 @@
       <option value="jpn">JPN</option>
       <option value="eng">ENG</option>
     </select>
-    <button on:click={download} disabled={selected.size === 0}>Download {selected.size}</button>
+    <button on:click={download} disabled={selected.size === 0 || resolving}>
+      {resolving ? 'Resolving…' : `Download ${selected.size}`}
+    </button>
     <button class="ghost" on:click={() => (showSettings = true)}>⚙</button>
   </div>
 {/if}
