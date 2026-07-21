@@ -56,7 +56,6 @@ export interface Settings {
   useCustomFolder: boolean; // File System Access instead of chrome.downloads
   segmentConcurrency: number;
   maxRetries: number;
-  loggingEnabled: boolean; // capture a diagnostic log buffer
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -67,8 +66,10 @@ export const DEFAULT_SETTINGS: Settings = {
   useCustomFolder: false,
   segmentConcurrency: 3,
   maxRetries: 3,
-  loggingEnabled: false,
 };
+
+/** storage.local key holding the diagnostic log ring buffer (popup subscribes via onChanged). */
+export const LOG_STORAGE_KEY = 'logs';
 
 export interface LogEntry {
   t: string; // ISO timestamp
@@ -85,9 +86,7 @@ export type PopupMsg =
   | { type: 'retry'; jobId: string }
   | { type: 'cancelAll' }
   | { type: 'getSettings' }
-  | { type: 'saveSettings'; settings: Settings }
-  | { type: 'getLogs' }
-  | { type: 'clearLogs' };
+  | { type: 'saveSettings'; settings: Settings };
 
 // any context -> service worker (collector)
 export type LogMsg = { type: 'log'; entry: LogEntry };

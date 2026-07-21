@@ -1,7 +1,6 @@
-import type { LogEntry } from './types';
+import { LOG_STORAGE_KEY as LOG_KEY, type LogEntry } from './types';
 
 const MAX_LINES = 5000;
-const LOG_KEY = 'logs';
 
 function fmt(msg: string, data?: unknown): string {
   if (data === undefined) return msg;

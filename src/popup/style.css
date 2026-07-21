@@ -47,3 +47,26 @@ select, input[type='text'] {
 .stage { font-size: 11px; color: var(--muted); text-transform: capitalize; }
 .failed { color: #ff5a5a; }
 hr { border: 0; border-top: 1px solid var(--line); margin: 10px 0; }
+
+/* log terminal */
+.logtoggle { width: 100%; text-align: left; }
+.term { border: 1px solid var(--line); border-radius: 6px; overflow: hidden; margin-top: 8px; }
+.term-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 4px 6px; background: #16171d; border-bottom: 1px solid var(--line);
+}
+.icon {
+  background: transparent; border: 0; padding: 3px; border-radius: 4px;
+  color: var(--muted); cursor: pointer; display: inline-flex; line-height: 0;
+}
+.icon:hover { color: var(--fg); background: #24262f; }
+.term-body {
+  background: #0a0a0a; color: #e6e6e6;
+  font: 11px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  max-height: 200px; overflow-y: auto; padding: 6px 8px;
+}
+.term-empty { color: #555; text-align: center; padding: 12px 0; }
+.logline { white-space: pre-wrap; word-break: break-word; padding: 1px 0; }
+.logline .dim { color: #6b7080; margin-right: 6px; }
+.logline.err { color: #ff9d5c; }
+.logline.err .dim { color: #a35a34; }

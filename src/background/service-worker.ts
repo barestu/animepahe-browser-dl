@@ -3,8 +3,8 @@
 
 import { loadSettings, saveSettings } from '@/lib/settings';
 import { buildFilename } from '@/lib/naming';
-import { appendLog, getLogs, clearLogs } from '@/lib/logger';
-import type { Episode, Job, LogEntry, LogMsg, OffscreenReply, Pick, PopupMsg } from '@/lib/types';
+import { appendLog } from '@/lib/logger';
+import type { Episode, Job, LogMsg, OffscreenReply, Pick, PopupMsg } from '@/lib/types';
 import { enableKwikNavRule, setCdnRefererRule, disableAllRules } from './dnr';
 import { ensureOffscreen, closeOffscreen } from './offscreen';
 import { resolveM3u8 } from './kwik';
@@ -13,19 +13,15 @@ import * as store from './queue-store';
 // jobId -> resolver for the offscreen blob result.
 const pending = new Map<string, { resolve: (blobUrl: string) => void; reject: (e: Error) => void }>();
 let looping = false;
-let loggingOn = false; // cached; refreshed from settings
 
 function jobId(ep: Episode, q: string, a: string): string {
   return `${ep.animeSession}:${ep.episodeSession}:${q}:${a}`;
 }
 
-// Collector-side log: persist only when logging is enabled.
-async function record(entry: LogEntry): Promise<void> {
-  if (loggingOn) await appendLog(entry);
-}
+// Logging is always on (capped ring buffer in storage.local; popup reads it live).
 function swLog(msg: string, data?: unknown): void {
   const line = data === undefined ? msg : `${msg} ${typeof data === 'string' ? data : JSON.stringify(data)}`;
-  void record({ t: new Date().toISOString(), ctx: 'sw', msg: line });
+  void appendLog({ t: new Date().toISOString(), ctx: 'sw', msg: line });
 }
 
 // ---- messaging ----
@@ -33,7 +29,7 @@ function swLog(msg: string, data?: unknown): void {
 chrome.runtime.onMessage.addListener((msg: PopupMsg | OffscreenReply | LogMsg, _sender, sendResponse) => {
   // log entries from offscreen/popup
   if ('type' in msg && msg.type === 'log') {
-    void record((msg as LogMsg).entry);
+    void appendLog((msg as LogMsg).entry);
     return false;
   }
   // offscreen -> sw
@@ -54,13 +50,7 @@ async function handlePopup(msg: PopupMsg): Promise<unknown> {
       return loadSettings();
     case 'saveSettings':
       await saveSettings(msg.settings);
-      loggingOn = msg.settings.loggingEnabled;
-      swLog('settings saved', { logging: loggingOn, domain: msg.settings.animepaheDomain });
-      return { ok: true };
-    case 'getLogs':
-      return getLogs();
-    case 'clearLogs':
-      await clearLogs();
+      swLog('settings saved', { domain: msg.settings.animepaheDomain });
       return { ok: true };
     case 'enqueue':
       swLog('enqueue', msg.picks.map((p) => `${p.episode.episodeNumber}[${p.quality}p]`).join(','));
@@ -114,7 +104,6 @@ async function runLoop(): Promise<void> {
   if (looping) return;
   looping = true;
   const settings = await loadSettings();
-  loggingOn = settings.loggingEnabled;
   await store.setRunning(true);
   swLog('batch start', { domain: settings.animepaheDomain, concurrency: settings.segmentConcurrency });
   await enableKwikNavRule(settings.animepaheDomain);
@@ -214,9 +203,6 @@ function downloadAndWait(url: string, filename: string): Promise<void> {
     });
   });
 }
-
-// Refresh cached logging flag whenever the SW (re)starts.
-void loadSettings().then((s) => (loggingOn = s.loggingEnabled));
 
 // Resume an interrupted batch if the SW restarts mid-run.
 chrome.runtime.onStartup.addListener(() => void runLoop());

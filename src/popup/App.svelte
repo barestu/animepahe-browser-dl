@@ -1,10 +1,10 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { getAnimeTitle, getEpisodeList, fetchPlayPage, pickSource } from '@/lib/animepahe';
   import { tabFetcher, type Fetcher } from '@/lib/tab-fetch';
-  import { logsToText, remoteLogger } from '@/lib/logger';
+  import { logsToText, remoteLogger, getLogs, clearLogs } from '@/lib/logger';
   import type { AppState, Audio, Episode, Job, LogEntry, Pick, Quality, Settings } from '@/lib/types';
-  import { DEFAULT_SETTINGS } from '@/lib/types';
+  import { DEFAULT_SETTINGS, LOG_STORAGE_KEY } from '@/lib/types';
 
   const plog = remoteLogger('popup');
 
@@ -24,6 +24,12 @@
   let fetchText: Fetcher = async () => '';
   let resolving = false;
 
+  // --- log terminal ---
+  let logsOpen = false;
+  let logs: LogEntry[] = [];
+  let copied = false;
+  let logBox: HTMLDivElement | undefined;
+
   const send = (msg: unknown) => chrome.runtime.sendMessage(msg);
 
   function parseAnimeSession(url: string | undefined): string | null {
@@ -39,6 +45,15 @@
 
     chrome.runtime.onMessage.addListener((msg) => {
       if (msg?.type === 'stateUpdate') state = msg.state as AppState;
+    });
+
+    // Live log buffer: initial read + subscribe to storage changes (SW writes there).
+    logs = await getLogs();
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === 'local' && changes[LOG_STORAGE_KEY]) {
+        logs = (changes[LOG_STORAGE_KEY].newValue as LogEntry[]) ?? [];
+        void autoscroll();
+      }
     });
 
     try {
@@ -130,26 +145,35 @@
   const pct = (j: Job) => (j.segTotal ? Math.round((j.segDone / j.segTotal) * 100) : j.stage === 'done' ? 100 : 0);
   const buildInfo = `v${__APP_VERSION__} · built ${__BUILD_TIME__}`;
 
-  async function toggleLogging() {
-    settings = { ...settings, loggingEnabled: !settings.loggingEnabled };
-    await send({ type: 'saveSettings', settings });
+  // Scroll the terminal to the bottom, but only if the user was already at the bottom.
+  async function autoscroll() {
+    if (!logBox) return;
+    const atBottom = logBox.scrollHeight - logBox.scrollTop - logBox.clientHeight < 24;
+    await tick();
+    if (atBottom && logBox) logBox.scrollTop = logBox.scrollHeight;
   }
 
-  async function downloadLogs() {
-    const logs = (await send({ type: 'getLogs' })) as LogEntry[];
-    const text = logsToText(logs);
-    const url = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    try {
-      await chrome.downloads.download({ url, filename: `animepahe-dl-logs-${stamp}.txt`, saveAs: true });
-    } finally {
-      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  async function toggleLogs() {
+    logsOpen = !logsOpen;
+    if (logsOpen) {
+      await tick();
+      if (logBox) logBox.scrollTop = logBox.scrollHeight;
     }
   }
 
-  async function clearLogs() {
-    await send({ type: 'clearLogs' });
+  async function copyLog() {
+    await navigator.clipboard.writeText(logsToText(logs));
+    copied = true;
+    setTimeout(() => (copied = false), 1000);
   }
+
+  async function clearLog() {
+    await clearLogs();
+    logs = [];
+  }
+
+  const shortTime = (iso: string) => iso.slice(11, 19); // HH:MM:SS
+  const isError = (m: string) => /error/i.test(m);
 </script>
 
 <div class="row" style="justify-content:space-between;align-items:baseline">
@@ -235,12 +259,39 @@
 {/if}
 
 <hr />
-<div class="row" style="justify-content:space-between;gap:6px">
-  <button class="ghost" on:click={toggleLogging} title="Capture a diagnostic log buffer">
-    Log: {settings.loggingEnabled ? 'ON' : 'off'}
-  </button>
-  <div class="row" style="gap:6px">
-    <button class="ghost" on:click={clearLogs}>Clear log</button>
-    <button class="ghost" on:click={downloadLogs}>Save log .txt</button>
+<button class="ghost logtoggle" on:click={toggleLogs}>
+  {logsOpen ? '▾' : '▸'} Logs {logs.length ? `(${logs.length})` : ''}
+</button>
+
+{#if logsOpen}
+  <div class="term">
+    <div class="term-bar">
+      <span class="muted" style="font-size:10px">diagnostic log</span>
+      <div class="row" style="gap:4px">
+        <button class="icon" title={copied ? 'Copied' : 'Copy'} on:click={copyLog}>
+          {#if copied}
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12" /></svg>
+          {:else}
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>
+          {/if}
+        </button>
+        <button class="icon" title="Clear" on:click={clearLog}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6M14 11v6" /><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /></svg>
+        </button>
+      </div>
+    </div>
+    <div class="term-body" bind:this={logBox}>
+      {#if logs.length === 0}
+        <div class="term-empty">— no logs —</div>
+      {:else}
+        {#each logs as e}
+          <div class="logline {isError(e.msg) ? 'err' : ''}">
+            <span class="dim">{shortTime(e.t)}</span>
+            <span class="dim">{e.ctx}</span>
+            <span>{e.msg}</span>
+          </div>
+        {/each}
+      {/if}
+    </div>
   </div>
-</div>
+{/if}
