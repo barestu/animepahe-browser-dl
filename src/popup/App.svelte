@@ -2,7 +2,10 @@
   import { onMount } from 'svelte';
   import { getAnimeTitle, getEpisodeList, fetchPlayPage, pickSource } from '@/lib/animepahe';
   import { tabFetcher, type Fetcher } from '@/lib/tab-fetch';
-  import type { AppState, Audio, Episode, Job, Pick, Quality, Settings } from '@/lib/types';
+  import { logsToText, remoteLogger } from '@/lib/logger';
+
+  const plog = remoteLogger('popup');
+  import type { AppState, Audio, Episode, Job, LogEntry, Pick, Quality, Settings } from '@/lib/types';
   import { DEFAULT_SETTINGS } from '@/lib/types';
 
   let loading = true;
@@ -98,22 +101,25 @@
     error = '';
     const picks: Pick[] = [];
     const missed: string[] = [];
-    try {
-      // Resolve each episode's kwik link first-party here; the SW can't fetch animepahe.
-      for (const ep of chosen) {
+    // Resolve each episode's kwik link first-party here; the SW can't fetch animepahe.
+    // One failure doesn't abort the batch — collect and report.
+    for (const ep of chosen) {
+      try {
         const sources = await fetchPlayPage(fetchText, domain, ep.animeSession, ep.episodeSession);
         const src = pickSource(sources, quality, audio);
         if (src) picks.push({ episode: ep, quality: src.quality, audio: src.audio, kwikUrl: src.kwikUrl });
         else missed.push(ep.episodeNumber);
+      } catch (e) {
+        const reason = e instanceof Error ? e.message : String(e);
+        plog(`resolve failed ep ${ep.episodeNumber}`, reason);
+        missed.push(`${ep.episodeNumber} (${reason})`);
       }
-      if (picks.length) await send({ type: 'enqueue', picks });
-      if (missed.length) error = `No source found for episode(s): ${missed.join(', ')}`;
-      selectNone();
-    } catch (e) {
-      error = `Resolve failed: ${e instanceof Error ? e.message : String(e)}`;
-    } finally {
-      resolving = false;
+      await new Promise((r) => setTimeout(r, 150)); // be gentle on animepahe
     }
+    if (picks.length) await send({ type: 'enqueue', picks });
+    error = missed.length ? `Could not resolve: ${missed.join(', ')}` : '';
+    selectNone();
+    resolving = false;
   }
 
   async function saveSettings() {
@@ -123,6 +129,27 @@
 
   const pct = (j: Job) => (j.segTotal ? Math.round((j.segDone / j.segTotal) * 100) : j.stage === 'done' ? 100 : 0);
   const buildInfo = `v${__APP_VERSION__} · built ${__BUILD_TIME__}`;
+
+  async function toggleLogging() {
+    settings = { ...settings, loggingEnabled: !settings.loggingEnabled };
+    await send({ type: 'saveSettings', settings });
+  }
+
+  async function downloadLogs() {
+    const logs = (await send({ type: 'getLogs' })) as LogEntry[];
+    const text = logsToText(logs);
+    const url = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    try {
+      await chrome.downloads.download({ url, filename: `animepahe-dl-logs-${stamp}.txt`, saveAs: true });
+    } finally {
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    }
+  }
+
+  async function clearLogs() {
+    await send({ type: 'clearLogs' });
+  }
 </script>
 
 <div class="row" style="justify-content:space-between;align-items:baseline">
@@ -206,3 +233,14 @@
     </div>
   {/each}
 {/if}
+
+<hr />
+<div class="row" style="justify-content:space-between;gap:6px">
+  <button class="ghost" on:click={toggleLogging} title="Capture a diagnostic log buffer">
+    Log: {settings.loggingEnabled ? 'ON' : 'off'}
+  </button>
+  <div class="row" style="gap:6px">
+    <button class="ghost" on:click={clearLogs}>Clear log</button>
+    <button class="ghost" on:click={downloadLogs}>Save log .txt</button>
+  </div>
+</div>

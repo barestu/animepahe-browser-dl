@@ -4,6 +4,9 @@
 
 import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { assembleTs } from '@/lib/hls';
+import { remoteLogger } from '@/lib/logger';
+
+const log = remoteLogger('offscreen');
 
 // Single-thread core shipped as a static asset in public/ffmpeg (copied at build time — no
 // remote code, MV3-compliant). Pass the chrome-extension:// URLs DIRECTLY (not blob URLs):
@@ -33,9 +36,11 @@ async function process(msg: ProcessMsg): Promise<void> {
   const { jobId, m3u8Url, concurrency } = msg;
   try {
     reply({ type: 'progress', jobId, stage: 'downloading', segDone: 0, segTotal: 0 });
+    log('assemble start', { jobId, concurrency });
     const ts = await assembleTs(m3u8Url, concurrency, (done, total) =>
       reply({ type: 'progress', jobId, stage: 'downloading', segDone: done, segTotal: total }),
     );
+    log('assembled TS', { jobId, bytes: ts.length });
 
     reply({ type: 'progress', jobId, stage: 'muxing', segDone: 0, segTotal: 0 });
     const ff = await getFfmpeg();
@@ -45,12 +50,15 @@ async function process(msg: ProcessMsg): Promise<void> {
     const out = (await ff.readFile('out.mp4')) as Uint8Array;
     await ff.deleteFile('in.ts');
     await ff.deleteFile('out.mp4');
+    log('mux done', { jobId, mp4Bytes: out.length });
 
     const blob = new Blob([out as BlobPart], { type: 'video/mp4' });
     const blobUrl = URL.createObjectURL(blob);
     reply({ type: 'blobReady', jobId, blobUrl });
   } catch (e) {
-    reply({ type: 'offscreenError', jobId, error: e instanceof Error ? e.message : String(e) });
+    const error = e instanceof Error ? e.message : String(e);
+    log('ERROR', { jobId, error });
+    reply({ type: 'offscreenError', jobId, error });
   }
 }
 

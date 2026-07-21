@@ -5,20 +5,48 @@
 
 export type Fetcher = (url: string) => Promise<string>;
 
+interface InPageResult {
+  ok: boolean;
+  status: number;
+  body: string;
+  err?: string;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 export function tabFetcher(tabId: number): Fetcher {
   return async (url: string) => {
-    const [res] = await chrome.scripting.executeScript({
-      target: { tabId },
-      // runs in the tab's ISOLATED world; same-origin fetch carries first-party cookies
-      func: async (u: string) => {
-        const r = await fetch(u, { credentials: 'include' });
-        if (!r.ok) throw new Error(`${r.status}`);
-        return r.text();
-      },
-      args: [url],
-      world: 'ISOLATED',
-    });
-    if (!res || res.result == null) throw new Error('in-tab fetch returned nothing');
-    return res.result as string;
+    // Retry: executeScript can transiently return no frame result if the page is mid-navigation.
+    let lastErr = 'unknown';
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const injected = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: async (u: string): Promise<InPageResult> => {
+          try {
+            const r = await fetch(u, { credentials: 'include' });
+            return { ok: r.ok, status: r.status, body: await r.text() };
+          } catch (e) {
+            return { ok: false, status: 0, body: '', err: e instanceof Error ? e.message : String(e) };
+          }
+        },
+        args: [url],
+        world: 'ISOLATED',
+      });
+
+      const res = injected?.[0]?.result as InPageResult | undefined;
+      if (!res) {
+        lastErr = 'no frame result (tab busy/navigating)';
+        await sleep(400 * (attempt + 1));
+        continue;
+      }
+      if (res.err) {
+        lastErr = res.err;
+        await sleep(400 * (attempt + 1));
+        continue;
+      }
+      if (!res.ok) throw new Error(`${url} -> HTTP ${res.status}`);
+      return res.body;
+    }
+    throw new Error(`in-tab fetch failed for ${url}: ${lastErr}`);
   };
 }

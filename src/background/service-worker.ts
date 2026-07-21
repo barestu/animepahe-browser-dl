@@ -3,7 +3,8 @@
 
 import { loadSettings, saveSettings } from '@/lib/settings';
 import { buildFilename } from '@/lib/naming';
-import type { Episode, Job, OffscreenReply, Pick, PopupMsg } from '@/lib/types';
+import { appendLog, getLogs, clearLogs } from '@/lib/logger';
+import type { Episode, Job, LogEntry, LogMsg, OffscreenReply, Pick, PopupMsg } from '@/lib/types';
 import { enableKwikNavRule, setCdnRefererRule, disableAllRules } from './dnr';
 import { ensureOffscreen, closeOffscreen } from './offscreen';
 import { resolveM3u8 } from './kwik';
@@ -12,14 +13,29 @@ import * as store from './queue-store';
 // jobId -> resolver for the offscreen blob result.
 const pending = new Map<string, { resolve: (blobUrl: string) => void; reject: (e: Error) => void }>();
 let looping = false;
+let loggingOn = false; // cached; refreshed from settings
 
 function jobId(ep: Episode, q: string, a: string): string {
   return `${ep.animeSession}:${ep.episodeSession}:${q}:${a}`;
 }
 
+// Collector-side log: persist only when logging is enabled.
+async function record(entry: LogEntry): Promise<void> {
+  if (loggingOn) await appendLog(entry);
+}
+function swLog(msg: string, data?: unknown): void {
+  const line = data === undefined ? msg : `${msg} ${typeof data === 'string' ? data : JSON.stringify(data)}`;
+  void record({ t: new Date().toISOString(), ctx: 'sw', msg: line });
+}
+
 // ---- messaging ----
 
-chrome.runtime.onMessage.addListener((msg: PopupMsg | OffscreenReply, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg: PopupMsg | OffscreenReply | LogMsg, _sender, sendResponse) => {
+  // log entries from offscreen/popup
+  if ('type' in msg && msg.type === 'log') {
+    void record((msg as LogMsg).entry);
+    return false;
+  }
   // offscreen -> sw
   if ('type' in msg && (msg.type === 'progress' || msg.type === 'blobReady' || msg.type === 'offscreenError')) {
     handleOffscreenReply(msg as OffscreenReply);
@@ -38,8 +54,16 @@ async function handlePopup(msg: PopupMsg): Promise<unknown> {
       return loadSettings();
     case 'saveSettings':
       await saveSettings(msg.settings);
+      loggingOn = msg.settings.loggingEnabled;
+      swLog('settings saved', { logging: loggingOn, domain: msg.settings.animepaheDomain });
+      return { ok: true };
+    case 'getLogs':
+      return getLogs();
+    case 'clearLogs':
+      await clearLogs();
       return { ok: true };
     case 'enqueue':
+      swLog('enqueue', msg.picks.map((p) => `${p.episode.episodeNumber}[${p.quality}p]`).join(','));
       await enqueue(msg.picks);
       void runLoop();
       return { ok: true };
@@ -90,7 +114,9 @@ async function runLoop(): Promise<void> {
   if (looping) return;
   looping = true;
   const settings = await loadSettings();
+  loggingOn = settings.loggingEnabled;
   await store.setRunning(true);
+  swLog('batch start', { domain: settings.animepaheDomain, concurrency: settings.segmentConcurrency });
   await enableKwikNavRule(settings.animepaheDomain);
   await ensureOffscreen();
 
@@ -104,6 +130,7 @@ async function runLoop(): Promise<void> {
     await closeOffscreen();
     await store.setRunning(false);
     looping = false;
+    swLog('batch end');
   }
 }
 
@@ -114,10 +141,13 @@ async function runJob(
   concurrency: number,
   maxRetries: number,
 ): Promise<void> {
+  const tag = `ep ${job.episode.episodeNumber}`;
   try {
     // 1. sniff the m3u8 by loading the (already-resolved) kwik link in a background tab
     await store.patchJob(job.id, { stage: 'extracting' });
+    swLog(`${tag}: extracting`, job.kwikUrl);
     const m3u8Url = await resolveM3u8(job.kwikUrl);
+    swLog(`${tag}: m3u8`, m3u8Url);
 
     // 2. point CDN fetches at THIS job's kwik origin (owocdn validates the embedding host)
     await setCdnRefererRule(new URL(job.kwikUrl).origin, animepaheDomain);
@@ -130,7 +160,9 @@ async function runJob(
     // 4. download from the service worker (offscreen can't use chrome.downloads)
     await store.patchJob(job.id, { stage: 'saving' });
     const filename = buildFilename(template, job);
+    swLog(`${tag}: saving`, filename);
     await downloadAndWait(blobUrl, filename);
+    swLog(`${tag}: done`, filename);
 
     // 5. release the blob in the context that created it
     chrome.runtime.sendMessage({ target: 'offscreen', type: 'revoke', blobUrl }).catch(() => {});
@@ -139,6 +171,7 @@ async function runJob(
   } catch (e) {
     pending.delete(job.id);
     const attempts = job.attempts + 1;
+    swLog(`${tag}: error (attempt ${attempts})`, e instanceof Error ? e.message : String(e));
     if (attempts < maxRetries) {
       await store.patchJob(job.id, { stage: 'queued', attempts });
     } else {
@@ -181,6 +214,9 @@ function downloadAndWait(url: string, filename: string): Promise<void> {
     });
   });
 }
+
+// Refresh cached logging flag whenever the SW (re)starts.
+void loadSettings().then((s) => (loggingOn = s.loggingEnabled));
 
 // Resume an interrupted batch if the SW restarts mid-run.
 chrome.runtime.onStartup.addListener(() => void runLoop());

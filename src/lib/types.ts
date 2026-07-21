@@ -56,6 +56,7 @@ export interface Settings {
   useCustomFolder: boolean; // File System Access instead of chrome.downloads
   segmentConcurrency: number;
   maxRetries: number;
+  loggingEnabled: boolean; // capture a diagnostic log buffer
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -66,7 +67,14 @@ export const DEFAULT_SETTINGS: Settings = {
   useCustomFolder: false,
   segmentConcurrency: 3,
   maxRetries: 3,
+  loggingEnabled: false,
 };
+
+export interface LogEntry {
+  t: string; // ISO timestamp
+  ctx: string; // 'sw' | 'offscreen' | 'popup'
+  msg: string;
+}
 
 // ---- Messaging contracts ----
 
@@ -77,7 +85,12 @@ export type PopupMsg =
   | { type: 'retry'; jobId: string }
   | { type: 'cancelAll' }
   | { type: 'getSettings' }
-  | { type: 'saveSettings'; settings: Settings };
+  | { type: 'saveSettings'; settings: Settings }
+  | { type: 'getLogs' }
+  | { type: 'clearLogs' };
+
+// any context -> service worker (collector)
+export type LogMsg = { type: 'log'; entry: LogEntry };
 
 // service worker -> offscreen
 export type OffscreenMsg =
