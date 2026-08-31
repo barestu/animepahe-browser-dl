@@ -3,6 +3,7 @@
   import { getAnimeTitle, getEpisodeList, fetchPlayPage, pickSource } from '@/lib/animepahe';
   import { tabFetcher, type Fetcher } from '@/lib/tab-fetch';
   import { logsToText, remoteLogger, getLogs, clearLogs } from '@/lib/logger';
+  import { parseAnimeSession } from '@/lib/naming';
   import type { AppState, Audio, Episode, Job, LogEntry, Pick, Quality, Settings } from '@/lib/types';
   import { DEFAULT_SETTINGS, LOG_STORAGE_KEY } from '@/lib/types';
 
@@ -31,11 +32,6 @@
   let logBox: HTMLDivElement | undefined;
 
   const send = (msg: unknown) => chrome.runtime.sendMessage(msg);
-
-  function parseAnimeSession(url: string | undefined): string | null {
-    const m = url?.match(/\/anime\/([A-Za-z0-9-]+)/);
-    return m?.[1] ?? null;
-  }
 
   onMount(async () => {
     settings = (await send({ type: 'getSettings' })) as Settings;

@@ -2,7 +2,7 @@
 // Offscreen can only use chrome.runtime, so ALL chrome.* API work happens here (SPEC).
 
 import { loadSettings, saveSettings } from '@/lib/settings';
-import { buildFilename } from '@/lib/naming';
+import { buildFilename, parseAnimeSession } from '@/lib/naming';
 import { appendLog } from '@/lib/logger';
 import type { Episode, Job, LogMsg, OffscreenReply, Pick, PopupMsg } from '@/lib/types';
 import { enableKwikNavRule, setCdnRefererRule, disableAllRules } from './dnr';
@@ -206,3 +206,20 @@ function downloadAndWait(url: string, filename: string): Promise<void> {
 
 // Resume an interrupted batch if the SW restarts mid-run.
 chrome.runtime.onStartup.addListener(() => void runLoop());
+
+// ---- badge: flag tabs on a matched animepahe anime page ----
+
+function updateBadge(tabId: number, url: string | undefined): void {
+  const matched = parseAnimeSession(url) !== null;
+  chrome.action.setBadgeText({ tabId, text: matched ? '✓' : '' });
+  if (matched) chrome.action.setBadgeBackgroundColor({ tabId, color: '#2e7d32' });
+}
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status !== 'complete' && changeInfo.url === undefined) return;
+  updateBadge(tabId, tab.url);
+});
+
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  chrome.tabs.get(tabId, (tab) => updateBadge(tabId, tab.url));
+});
