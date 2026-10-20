@@ -46,6 +46,13 @@ select, input[type='text'] {
 .bar > i { display: block; height: 100%; background: var(--accent); }
 .stage { font-size: 11px; color: var(--muted); text-transform: capitalize; }
 .failed { color: #ff5a5a; }
+
+/* active-tab match verdict */
+.status { display: flex; gap: 6px; align-items: center; font-size: 11px; margin: -2px 0 8px; line-height: 1.2; }
+.status svg { flex: none; }
+.status span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status.ok { color: #3fb950; }
+.status.bad { color: #ff5a5a; }
 hr { border: 0; border-top: 1px solid var(--line); margin: 10px 0; }
 
 /* log terminal */

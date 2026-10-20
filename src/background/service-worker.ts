@@ -8,6 +8,7 @@ import type { Episode, Job, LogMsg, OffscreenReply, Pick, PopupMsg } from '@/lib
 import { enableKwikNavRule, setCdnRefererRule, disableAllRules } from './dnr';
 import { ensureOffscreen, closeOffscreen } from './offscreen';
 import { resolveM3u8 } from './kwik';
+import { updateBadge, refreshAllBadges } from './badge';
 import * as store from './queue-store';
 
 // jobId -> resolver for the offscreen blob result.
@@ -23,6 +24,24 @@ function swLog(msg: string, data?: unknown): void {
   const line = data === undefined ? msg : `${msg} ${typeof data === 'string' ? data : JSON.stringify(data)}`;
   void appendLog({ t: new Date().toISOString(), ctx: 'sw', msg: line });
 }
+
+// ---- toolbar badge ----
+// Registered at top level: MV3 only revives the SW for listeners bound synchronously.
+
+chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
+  // animepahe is an SPA — the URL can change without a full load, so watch both.
+  if (info.url || info.status === 'complete') void updateBadge(tabId, info.url ?? tab.url);
+});
+
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  chrome.tabs.get(tabId).then(
+    (tab) => void updateBadge(tabId, tab.url),
+    () => {}, // tab vanished
+  );
+});
+
+chrome.runtime.onStartup.addListener(() => void refreshAllBadges());
+chrome.runtime.onInstalled.addListener(() => void refreshAllBadges());
 
 // ---- messaging ----
 
@@ -51,6 +70,7 @@ async function handlePopup(msg: PopupMsg): Promise<unknown> {
     case 'saveSettings':
       await saveSettings(msg.settings);
       swLog('settings saved', { domain: msg.settings.animepaheDomain });
+      void refreshAllBadges(); // the saved domain feeds matchTab()
       return { ok: true };
     case 'enqueue':
       swLog('enqueue', msg.picks.map((p) => `${p.episode.episodeNumber}[${p.quality}p]`).join(','));

@@ -2,6 +2,7 @@
   import { onMount, tick } from 'svelte';
   import { getAnimeTitle, getEpisodeList, fetchPlayPage, pickSource } from '@/lib/animepahe';
   import { tabFetcher, type Fetcher } from '@/lib/tab-fetch';
+  import { matchTab, type TabMatch } from '@/lib/match';
   import { logsToText, remoteLogger, getLogs, clearLogs } from '@/lib/logger';
   import type { AppState, Audio, Episode, Job, LogEntry, Pick, Quality, Settings } from '@/lib/types';
   import { DEFAULT_SETTINGS, LOG_STORAGE_KEY } from '@/lib/types';
@@ -23,6 +24,7 @@
   let domain = '';
   let fetchText: Fetcher = async () => '';
   let resolving = false;
+  let match: TabMatch | null = null;
 
   // --- log terminal ---
   let logsOpen = false;
@@ -31,11 +33,6 @@
   let logBox: HTMLDivElement | undefined;
 
   const send = (msg: unknown) => chrome.runtime.sendMessage(msg);
-
-  function parseAnimeSession(url: string | undefined): string | null {
-    const m = url?.match(/\/anime\/([A-Za-z0-9-]+)/);
-    return m?.[1] ?? null;
-  }
 
   onMount(async () => {
     settings = (await send({ type: 'getSettings' })) as Settings;
@@ -58,15 +55,16 @@
 
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      const session = parseAnimeSession(tab?.url);
-      if (!session || tab?.id == null) {
+      match = matchTab(tab?.url, settings.animepaheDomain);
+      if (!match.ok || tab?.id == null) {
         error = 'Open an animepahe anime page (…/anime/…) then reopen this popup.';
         return;
       }
       tabId = tab.id;
       // Use the domain of the tab the user is actually on (e.g. animepahe.pw). All animepahe
       // fetches run first-party inside this tab so the SameSite=Lax cf_clearance cookie is sent.
-      domain = new URL(tab.url!).hostname;
+      domain = match.host;
+      const session = match.animeSession;
       fetchText = tabFetcher(tabId);
       if (domain !== settings.animepaheDomain) {
         settings = { ...settings, animepaheDomain: domain };
@@ -180,6 +178,19 @@
   <h1>Animepahe Batch Downloader</h1>
   <span class="muted" style="font-size:10px" title="build version + timestamp">{buildInfo}</span>
 </div>
+
+<!-- Tab match verdict: same matchTab() the toolbar badge uses, so the two agree. -->
+{#if match?.ok}
+  <div class="status ok" title="This tab is a downloadable animepahe anime page">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12" /></svg>
+    <span>{match.host} · /anime/{match.animeSession}</span>
+  </div>
+{:else if match}
+  <div class="status bad" title={match.host || 'no page'}>
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 6 6 18M6 6l12 12" /></svg>
+    <span>{match.reason}</span>
+  </div>
+{/if}
 
 {#if showSettings}
   <div>

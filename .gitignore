@@ -1,6 +1,7 @@
 node_modules/
 dist/
 public/ffmpeg/
+public/icons/
 .claude/
 *.log
 .DS_Store

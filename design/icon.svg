@@ -1,0 +1,15 @@
+<!-- Toolbar icon source. Palette matches the popup (style.css bg + accent tokens).
+     Tuned for 16px: one bold glyph, no hairlines, no inner stroke. The arrowhead
+     is a wide triangle so it still reads as "play" at large sizes. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff9a6a"/>
+      <stop offset="1" stop-color="#ff5722"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="#23252e"/>
+  <rect x="53" y="16" width="22" height="42" rx="11" fill="url(#g)"/>
+  <path d="M26 50h76L64 96z" fill="url(#g)"/>
+  <rect x="26" y="102" width="76" height="14" rx="7" fill="#ff6a3d"/>
+</svg>
