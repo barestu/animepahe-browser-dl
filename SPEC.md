@@ -28,6 +28,7 @@ Cloudflare challenges are passed normally by the user's own session (no cookie-r
 | 14 | Domains | Domain taken from the active tab's host, persisted; host perms `<all_urls>`. |
 | 15 | Distribution | Unpacked / dev-mode load (no Web Store). |
 | 16 | Segment fetch | Parallel pool (default **3**, clamped ≤4), all-in-memory, 429/503 backoff. |
+| 17 | Pause/cancel | **Cooperative gate**, not force-kill. Pause preserves in-flight segments; cancel aborts and drops the job. |
 
 ## Cloudflare strategy _(as-built)_
 
@@ -54,7 +55,8 @@ extension origin → Cloudflare 403. As-built fix:
   fully-resolved `Pick[]` (episode + quality + audio + kwikUrl) to the SW.
 - UI: per-episode checkboxes, select-all, range input (e.g. `1-12,15`), quality + audio dropdown,
   Download button ("Resolving…" while pre-resolving).
-- Queue/progress view: per-episode stage + segment count, failed list + retry button.
+- Queue/progress view: per-episode stage + segment count, failed list + retry button, per-episode
+  cancel (✕), and batch Pause/Resume + Cancel all + Clear done.
 - Receives live `stateUpdate` broadcasts from the SW; refetches state on open.
 - Header shows `v<version> · built <YYYY-MM-DD HH:mm>` (baked via Vite `define`) to identify the
   loaded build.
@@ -85,6 +87,56 @@ extension origin → Cloudflare 403. As-built fix:
 - Injected into the background kwik tab; calls `video.play()` if the HLS manifest doesn't
   auto-load. No injection on the animepahe page.
 
+## Pause / cancel _(as-built)_
+
+`src/lib/control.ts` defines a `Gate` (pause flag + waiter list + `AbortController`) shared by the
+service worker and the offscreen document. Nothing is force-killed: long operations `await
+gate.wait()` at interruptible boundaries and pass `gate.signal` to abortable APIs.
+
+| Control | Scope | Effect |
+|---------|-------|--------|
+| Pause / Resume | whole batch | Blocks the segment pool between segments, and the run loop between episodes. Downloaded segments stay in the offscreen document's memory, so resume continues the same run — nothing is re-fetched. |
+| ✕ (per job) | one episode | Aborts it if in flight, then removes it from the queue. The batch continues with the next episode. |
+| Cancel all | whole batch | Aborts the in-flight episode and clears the queue. Also clears the paused flag. |
+| Clear done | whole batch | Drops only `done` jobs from the list; touches nothing in flight. |
+
+Completed jobs are **auto-cleared when the queue drains** (`Settings.autoClearDone`, default on,
+toggle in the settings panel). Clearing is deliberately deferred to batch end rather than done
+per-episode: during the run the list stays a live record of what finished, and once drained it
+holds exactly what still needs attention — failed jobs with their Retry button. Since an all-success
+batch would otherwise empty the queue view entirely, `clearFinished()` leaves a receipt
+(`AppState.lastDone = {count, at}`) that the popup renders as "Saved N episodes"; it is dismissible
+and is wiped on the next `enqueue`.
+
+Interruptible boundaries, in pipeline order:
+
+1. **kwik sniff** — cancel closes the sniffing tab immediately instead of waiting out the 30 s
+   timeout. *Not pausable* (the tab would likely time out anyway); a pause requested here is
+   taken at the next boundary.
+2. **segment pool** (`lib/hls.ts`) — each worker awaits the gate *before* claiming the next
+   index, so a pause never strands a half-claimed slot. `fetch` carries `gate.signal`; an aborted
+   fetch is classified as a cancel, never as a transient CDN error, so it is not retried. The
+   429/503 backoff sleep is abortable and re-checks the gate on wake.
+3. **before mux** — last cheap checkpoint. ffmpeg.wasm cannot be suspended once `exec()` starts,
+   so a pause taken during download holds *before* the mux rather than inside it.
+4. **mux** — *not pausable*. Cancel is handled by `ffmpeg.terminate()` (the only exit from a
+   running `exec()`); the instance is dropped so the next job loads a fresh core.
+5. **save** — cancel calls `chrome.downloads.cancel` + `erase` so no partial file is left behind.
+
+Caveats:
+
+- **Pause keeps the SW alive.** A paused batch produces no message traffic, and MV3 would
+  terminate the idle service worker (~30 s), stranding the gate and the offscreen document's
+  in-memory segments. While paused, the SW touches `chrome.runtime.getPlatformInfo()` on a 20 s
+  interval to reset the idle timer.
+- **Pause does not disarm the DNR Referer rules** mid-batch — segment fetches must still work on
+  resume. A pause set while the queue is *idle* is taken before the rules are armed, so an
+  idle pause window does not hold the extension's widest surface open.
+- **A canceled job is removed, not marked.** There is no `canceled` stage: the job disappearing
+  from the queue is the feedback, and the log panel records `ep N: canceled`.
+- **Cancel is two-step in the popup** (`Cancel all` → `Sure?`, 3 s arm window). `window.confirm()`
+  is deliberately not used — a modal dismisses the extension popup mid-decision.
+
 ## Per-episode pipeline _(as-built)_
 1. **(popup, pre-enqueue)** Fetch play page `/play/<anime>/<episode>` in-tab → regex-parse
    per-quality kwik links (`button[data-src]` + `data-resolution`/`data-audio`) → pick target
@@ -109,7 +161,8 @@ extension origin → Cloudflare 403. As-built fix:
      (traversal guard), episode zero-padded, decimals (7.5) preserved.
    - _Optional FSA custom folder is designed but deferred — `Settings.useCustomFolder` is an inert
      flag; all saves currently go through `chrome.downloads`._
-8. Retry N attempts on fail → mark failed → continue batch → report at end.
+8. Retry N attempts on fail → mark failed → continue batch → report at end. Every step above is
+   gated — see "Pause / cancel".
 
 ## Manifest _(as-built)_
 - Permissions: `downloads`, `offscreen`, `storage`, `tabs`, `scripting`, `webRequest`,
@@ -118,9 +171,18 @@ extension origin → Cloudflare 403. As-built fix:
 - CSP `extension_pages`: `script-src 'self' 'wasm-unsafe-eval'; object-src 'self'`.
 - `web_accessible_resources`: `assets/*` + `ffmpeg/*` (worker imports the core by extension URL).
 - Content script matches: `*://*.kwik.si/*`, `*://*.kwik.cx/*` only.
-- Active animepahe domain is derived from the tab and stored in settings (not hardcoded).
+- Active animepahe domain is derived from the tab and stored in settings (not hardcoded). The
+  tab must still clear `src/lib/match.ts` — host `animepahe.<tld>` *or* the saved domain, plus an
+  `/anime/<session>` path. That is the only host allowlist in the codebase; it exists so the
+  toolbar badge cannot claim a match on an unrelated site that happens to have an `/anime/` path.
 
 ## Build / packaging _(as-built)_
+- `scripts/gen-icons.mjs` rasterizes `design/icon.svg` into `public/icons/*.png` via sharp (MV3
+  rejects SVG in `icons`/`action.default_icon`). Three variants × four sizes: `icon-<n>` (base,
+  the manifest default), `icon-ok-<n>` and `icon-bad-<n>` (✓/✗ corner disc composed onto the same
+  base SVG at build time, so the glyph has one source of truth). `background/badge.ts` swaps them
+  per tab with `chrome.action.setIcon`. Gitignored — regenerated by `dev`/`build`. Source lives in
+  `design/`, not `assets/`, which crxjs globs into the bundle.
 - `scripts/copy-ffmpeg.mjs` copies `@ffmpeg/core` (single-thread ESM) into `public/ffmpeg/` at
   build (`public/ffmpeg/` is gitignored — regenerated). Ships as static extension assets; no
   remote code.
@@ -130,6 +192,9 @@ extension origin → Cloudflare 403. As-built fix:
 
 ## Deferred (post-MVP)
 - Popup search box (`/api?m=search`).
+- Pause *during* the ffmpeg mux (needs a suspendable wasm core; currently pause waits it out).
+- Surviving a browser restart mid-pause (segments live in offscreen RAM, not on disk — the
+  OPFS/IndexedDB item below is the prerequisite).
 - Resume partial episode (re-fetch only missing segments after crash).
 - OPFS/IndexedDB streaming assembly (lower peak RAM for large 1080p).
 - Multithread ffmpeg core (needs SAB + COOP/COEP).

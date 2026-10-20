@@ -8,7 +8,10 @@ Because it runs in your real browser, Cloudflare challenges are passed by your o
 
 ## How it works
 
-1. Open an anime page (`…/anime/<id>`), click the extension icon.
+1. Open an anime page (`…/anime/<id>`), click the extension icon. The toolbar icon itself carries
+   the verdict — a green ✓ corner when the tab is downloadable, a red ✗ when you're on animepahe
+   but the wrong page, plain when the tab is unrelated — matched by a ✓/✗ badge and repeated with
+   the reason inside the popup.
 2. Popup lists all episodes (via animepahe's release API, using your logged-in cookies).
 3. Pick episodes (checkboxes / range like `1-12,15`), quality, and audio → **Download**.
 4. Per episode: the extension opens the kwik player in a hidden tab, sniffs the HLS `.m3u8`,

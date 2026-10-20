@@ -2,12 +2,6 @@ import type { Job } from './types';
 
 const ILLEGAL = /[\\/:*?"<>|]/g;
 
-/** Extract the anime session id from an animepahe `/anime/<session>` URL, if present. */
-export function parseAnimeSession(url: string | undefined): string | null {
-  const m = url?.match(/\/anime\/([A-Za-z0-9-]+)/);
-  return m?.[1] ?? null;
-}
-
 /** Sanitize one path segment: strip illegal chars AND traversal. Never returns empty. */
 function sanitizeSegment(s: string): string {
   const cleaned = s
