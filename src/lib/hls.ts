@@ -1,6 +1,12 @@
 // HLS assembly: parse m3u8 -> fetch key -> fetch+decrypt segments -> concat TS bytes.
 // Runs in the OFFSCREEN document. Segment/key/m3u8 requests get their Referer/Origin
 // rewritten to kwik by a DNR session rule installed by the service worker (SPEC Q6).
+//
+// Pause/cancel: every pool worker awaits `gate.wait()` before claiming the next segment, and
+// every fetch carries `gate.signal`. Pausing blocks the workers, so already-downloaded segments
+// stay in the results array and resuming continues the same run.
+
+import { Gate, CanceledError, sleep } from './control';
 
 interface KeyInfo {
   uri: string;
@@ -51,11 +57,16 @@ export function parseM3u8(text: string, m3u8Url: string): Playlist {
   return { segmentUrls, key };
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
 // Retry on rate-limit / transient CDN errors with exponential backoff (honoring Retry-After).
-async function fetchBytes(url: string, attempt = 0): Promise<Uint8Array> {
-  const res = await fetch(url);
+async function fetchBytes(url: string, gate: Gate, attempt = 0): Promise<Uint8Array> {
+  let res: Response;
+  try {
+    res = await fetch(url, { signal: gate.signal });
+  } catch (e) {
+    // An aborted fetch is a cancel, never a transient CDN failure — don't retry it.
+    if (gate.isCanceled) throw new CanceledError();
+    throw e;
+  }
   if (res.ok) return new Uint8Array(await res.arrayBuffer());
 
   const retryable = res.status === 429 || res.status === 503 || res.status === 502;
@@ -64,8 +75,9 @@ async function fetchBytes(url: string, attempt = 0): Promise<Uint8Array> {
     const backoff = Number.isFinite(retryAfter) && retryAfter > 0
       ? retryAfter * 1000
       : Math.min(1000 * 2 ** attempt, 15_000) + Math.floor(attempt * 250);
-    await sleep(backoff);
-    return fetchBytes(url, attempt + 1);
+    await sleep(backoff, gate); // rejects immediately on cancel instead of idling 15s
+    await gate.wait(); // a pause during backoff holds here rather than hammering the CDN
+    return fetchBytes(url, gate, attempt + 1);
   }
   throw new Error(`fetch ${url} -> ${res.status}`);
 }
@@ -85,11 +97,19 @@ interface Pooled<T> {
 }
 
 /** Run tasks with bounded concurrency, preserving order in the results array. */
-async function pool<T>(count: number, limit: number, task: (i: number) => Promise<T>): Promise<T[]> {
+async function pool<T>(
+  count: number,
+  limit: number,
+  gate: Gate,
+  task: (i: number) => Promise<T>,
+): Promise<T[]> {
   const results: T[] = new Array(count);
   let next = 0;
   async function worker(): Promise<void> {
     while (next < count) {
+      // Interruptible boundary: claim the index only after the gate lets us through, so a
+      // pause never strands a half-claimed slot and a cancel stops the pool promptly.
+      await gate.wait();
       const i = next++;
       results[i] = await task(i);
     }
@@ -107,17 +127,18 @@ export async function assembleTs(
   m3u8Url: string,
   concurrency: number,
   onProgress: AssembleProgress,
+  gate: Gate,
 ): Promise<Uint8Array> {
-  const manifestText = new TextDecoder().decode(await fetchBytes(m3u8Url));
+  const manifestText = new TextDecoder().decode(await fetchBytes(m3u8Url, gate));
   const { segmentUrls, key } = parseM3u8(manifestText, m3u8Url);
   if (segmentUrls.length === 0) throw new Error('no segments in m3u8');
 
-  const cryptoKey = key ? await importKey(await fetchBytes(key.uri)) : null;
+  const cryptoKey = key ? await importKey(await fetchBytes(key.uri, gate)) : null;
   const total = segmentUrls.length;
   let done = 0;
 
-  const parts = await pool<Pooled<Uint8Array>>(total, concurrency, async (i) => {
-    const raw = await fetchBytes(segmentUrls[i]);
+  const parts = await pool<Pooled<Uint8Array>>(total, concurrency, gate, async (i) => {
+    const raw = await fetchBytes(segmentUrls[i], gate);
     let value = raw;
     if (cryptoKey && key) {
       const iv = key.iv ?? ivFromSequence(i);

@@ -44,8 +44,19 @@ select, input[type='text'] {
 .job { border-top: 1px solid var(--line); padding: 6px 0; }
 .bar { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; margin-top: 4px; }
 .bar > i { display: block; height: 100%; background: var(--accent); }
+/* Paused progress reads as "held", not "stalled": dimmed + striped, no animation. */
+.bar > i.paused {
+  background: repeating-linear-gradient(45deg, #6b7080, #6b7080 4px, #4b4f5c 4px, #4b4f5c 8px);
+}
 .stage { font-size: 11px; color: var(--muted); text-transform: capitalize; }
 .failed { color: #ff5a5a; }
+button.ghost.danger { color: #ff8a8a; border-color: #4a2a2a; padding: 4px 8px; }
+button.ghost.danger:hover { background: #2a1a1a; }
+.pausedchip {
+  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+  color: #f0c060; border: 1px solid #5a4620; background: #2a2314;
+  border-radius: 4px; padding: 1px 5px; margin-left: 4px; vertical-align: 1px;
+}
 
 /* active-tab match verdict */
 .status { display: flex; gap: 6px; align-items: center; font-size: 11px; margin: -2px 0 8px; line-height: 1.2; }
@@ -53,6 +64,9 @@ select, input[type='text'] {
 .status span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .status.ok { color: #3fb950; }
 .status.bad { color: #ff5a5a; }
+/* Batch receipt: the success signal that survives auto-clearing the done jobs. */
+.status.receipt { justify-content: flex-start; margin: 8px 0 0; }
+.status.receipt span { flex: 1; }
 hr { border: 0; border-top: 1px solid var(--line); margin: 10px 0; }
 
 /* log terminal */

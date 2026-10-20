@@ -4,6 +4,7 @@
 
 import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { assembleTs } from '@/lib/hls';
+import { Gate, CanceledError } from '@/lib/control';
 import { remoteLogger } from '@/lib/logger';
 
 const log = remoteLogger('offscreen');
@@ -20,6 +21,10 @@ type ProcessMsg = Extract<OffscreenMsg, { type: 'process' }>;
 
 let ffmpeg: FFmpeg | null = null;
 
+// jobId -> pause/cancel gate for the job this document is processing (one at a time; the SW
+// runs episodes sequentially). The SW drives these via 'control' messages.
+const gates = new Map<string, Gate>();
+
 async function getFfmpeg(): Promise<FFmpeg> {
   if (ffmpeg) return ffmpeg;
   const instance = new FFmpeg();
@@ -32,15 +37,39 @@ function reply(msg: OffscreenReply): void {
   chrome.runtime.sendMessage(msg);
 }
 
+/**
+ * ffmpeg.wasm has no cancel API — the only way out of a running exec() is to kill the worker.
+ * We drop the instance so the next job reloads a fresh core.
+ */
+function killFfmpeg(): void {
+  if (!ffmpeg) return;
+  try {
+    ffmpeg.terminate();
+  } catch {
+    /* already gone */
+  }
+  ffmpeg = null;
+}
+
 async function process(msg: ProcessMsg): Promise<void> {
   const { jobId, m3u8Url, concurrency } = msg;
+  const gate = new Gate();
+  gates.set(jobId, gate);
+  gate.signal.addEventListener('abort', killFfmpeg, { once: true });
   try {
     reply({ type: 'progress', jobId, stage: 'downloading', segDone: 0, segTotal: 0 });
     log('assemble start', { jobId, concurrency });
-    const ts = await assembleTs(m3u8Url, concurrency, (done, total) =>
-      reply({ type: 'progress', jobId, stage: 'downloading', segDone: done, segTotal: total }),
+    const ts = await assembleTs(
+      m3u8Url,
+      concurrency,
+      (done, total) => reply({ type: 'progress', jobId, stage: 'downloading', segDone: done, segTotal: total }),
+      gate,
     );
     log('assembled TS', { jobId, bytes: ts.length });
+
+    // Last cheap checkpoint: a pause taken here holds BEFORE the mux, because ffmpeg.wasm
+    // cannot be suspended once exec() starts.
+    await gate.wait();
 
     reply({ type: 'progress', jobId, stage: 'muxing', segDone: 0, segTotal: 0 });
     const ff = await getFfmpeg();
@@ -52,18 +81,34 @@ async function process(msg: ProcessMsg): Promise<void> {
     await ff.deleteFile('out.mp4');
     log('mux done', { jobId, mp4Bytes: out.length });
 
+    // Don't mint a blob URL nobody will ever claim: the SW has stopped waiting for this job.
+    if (gate.isCanceled) throw new CanceledError();
+
     const blob = new Blob([out as BlobPart], { type: 'video/mp4' });
     const blobUrl = URL.createObjectURL(blob);
     reply({ type: 'blobReady', jobId, blobUrl });
   } catch (e) {
-    const error = e instanceof Error ? e.message : String(e);
-    log('ERROR', { jobId, error });
+    const error = gate.isCanceled ? 'canceled' : e instanceof Error ? e.message : String(e);
+    log(gate.isCanceled ? 'canceled' : 'ERROR', { jobId, error });
     reply({ type: 'offscreenError', jobId, error });
+  } finally {
+    gate.signal.removeEventListener('abort', killFfmpeg);
+    gates.delete(jobId);
   }
+}
+
+function control(action: 'pause' | 'resume' | 'cancel', jobId: string): void {
+  const gate = gates.get(jobId);
+  if (!gate) return;
+  log(`control ${action}`, { jobId });
+  if (action === 'pause') gate.pause();
+  else if (action === 'resume') gate.resume();
+  else gate.cancel();
 }
 
 chrome.runtime.onMessage.addListener((msg: OffscreenMsg) => {
   if (msg?.target !== 'offscreen') return;
   if (msg.type === 'process') void process(msg);
   else if (msg.type === 'revoke') URL.revokeObjectURL(msg.blobUrl);
+  else if (msg.type === 'control') control(msg.action, msg.jobId);
 });

@@ -54,6 +54,8 @@ export interface Settings {
   audio: Audio;
   filenameTemplate: string; // tokens: {title} {episode} {quality} {audio}
   useCustomFolder: boolean; // File System Access instead of chrome.downloads
+  /** Drop completed jobs from the queue when a batch drains, leaving only what needs attention. */
+  autoClearDone: boolean;
   segmentConcurrency: number;
   maxRetries: number;
 }
@@ -64,6 +66,7 @@ export const DEFAULT_SETTINGS: Settings = {
   audio: 'jpn',
   filenameTemplate: 'Anime/{title}/{title} - {episode} [{quality}p].mp4',
   useCustomFolder: false,
+  autoClearDone: true,
   segmentConcurrency: 3,
   maxRetries: 3,
 };
@@ -84,7 +87,12 @@ export type PopupMsg =
   | { type: 'getState' }
   | { type: 'enqueue'; picks: Pick[] }
   | { type: 'retry'; jobId: string }
+  | { type: 'pause' }
+  | { type: 'resume' }
+  | { type: 'cancelJob'; jobId: string }
   | { type: 'cancelAll' }
+  | { type: 'clearFinished' }
+  | { type: 'dismissReceipt' }
   | { type: 'getSettings' }
   | { type: 'saveSettings'; settings: Settings };
 
@@ -100,7 +108,9 @@ export type OffscreenMsg =
       m3u8Url: string;
       concurrency: number;
     }
-  | { target: 'offscreen'; type: 'revoke'; blobUrl: string };
+  | { target: 'offscreen'; type: 'revoke'; blobUrl: string }
+  // Cooperative control of the job the offscreen document is currently processing.
+  | { target: 'offscreen'; type: 'control'; action: 'pause' | 'resume' | 'cancel'; jobId: string };
 
 // offscreen -> service worker
 export type OffscreenReply =
@@ -111,4 +121,8 @@ export type OffscreenReply =
 export interface AppState {
   jobs: Job[];
   running: boolean;
+  /** Batch-level pause. Persisted so it survives a service-worker restart. */
+  paused: boolean;
+  /** Receipt for the last cleared batch — the only success signal left once done jobs auto-clear. */
+  lastDone?: { count: number; at: string };
 }
