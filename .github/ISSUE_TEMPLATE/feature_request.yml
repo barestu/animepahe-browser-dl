@@ -1,0 +1,33 @@
+name: Feature request
+description: Suggest a change to how the extension works.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Two things this project deliberately will not do, so you can save yourself the
+        write-up: it will not request **additional Chrome permissions**, and it will not
+        be **published to the Chrome Web Store**. See the Caveats section of the README
+        and the Security notes in [SPEC.md](../../SPEC.md).
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve
+      description: Describe the situation you hit, not the solution you have in mind.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like it to do
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+    validations:
+      required: false

@@ -1,4 +1,11 @@
 import { defineManifest } from '@crxjs/vite-plugin';
+import { readFileSync } from 'node:fs';
+
+// package.json is the single source of truth for the version — the popup header renders
+// __APP_VERSION__ from the same file (vite.config.ts), so the two can never disagree.
+// This module is only ever evaluated by Vite in Node; it is never bundled into an
+// extension context, so node:fs here is safe.
+const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 // Generated from design/icon.svg by scripts/gen-icons.mjs into public/icons/,
 // which Vite copies verbatim to the dist root — hence root-relative paths here.
@@ -14,7 +21,7 @@ const ICONS = {
 export default defineManifest({
   manifest_version: 3,
   name: 'Animepahe Batch Downloader',
-  version: '0.1.0',
+  version: pkg.version,
   description: 'Batch-download episodes from an open animepahe anime page.',
   minimum_chrome_version: '116',
   icons: ICONS,

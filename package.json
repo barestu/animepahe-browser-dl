@@ -1,14 +1,31 @@
 {
   "name": "animepahe-browser-dl",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Batch-download anime episodes from an open animepahe page (Chrome MV3 extension)",
   "type": "module",
+  "private": true,
+  "license": "MIT",
+  "author": "barestu",
+  "packageManager": "pnpm@10.19.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/barestu/animepahe-browser-dl.git"
+  },
+  "homepage": "https://github.com/barestu/animepahe-browser-dl#readme",
+  "bugs": {
+    "url": "https://github.com/barestu/animepahe-browser-dl/issues"
+  },
   "scripts": {
     "copy:ffmpeg": "node scripts/copy-ffmpeg.mjs",
     "gen:icons": "node scripts/gen-icons.mjs",
     "dev": "pnpm copy:ffmpeg && pnpm gen:icons && vite",
     "build": "pnpm copy:ffmpeg && pnpm gen:icons && tsc --noEmit && vite build",
-    "check": "svelte-check --tsconfig ./tsconfig.json"
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "zip": "node scripts/zip.mjs",
+    "release:notes": "node scripts/changelog.mjs draft"
   },
   "devDependencies": {
     "@crxjs/vite-plugin": "^2.0.0",

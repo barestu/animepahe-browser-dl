@@ -11,6 +11,8 @@ pnpm dev          # same prep, then vite with crxjs HMR (still load dist/)
 pnpm check        # svelte-check (type-checks .svelte; tsc alone does not)
 pnpm copy:ffmpeg  # refresh public/ffmpeg/ from node_modules/@ffmpeg/core
 pnpm gen:icons    # rasterize design/icon.svg -> public/icons/*.png (sharp)
+pnpm zip          # pack dist/ -> release/animepahe-browser-dl-v<version>.zip (contents at zip root)
+pnpm release:notes # draft a CHANGELOG section from commits since the last tag
 ```
 
 Load in Chrome: `chrome://extensions` → Developer mode → **Load unpacked** → `dist/`.
@@ -19,12 +21,20 @@ Requires Chrome 116+ (`minimum_chrome_version`: offscreen + `declarativeNetReque
 `vite.config.ts` defines `__APP_VERSION__` / `__BUILD_TIME__`; the popup header renders them, which
 is the only way to tell which build is actually loaded after an HMR session.
 
+**`package.json` is the only place the version lives** — `src/manifest.config.ts` reads it from
+there, so the manifest and the popup header can never disagree. Never hardcode a version in the
+manifest config.
+
 There is **no test framework**. Verification is `pnpm build` (which runs `tsc --noEmit`), `pnpm check`,
-and manually exercising the extension against a live animepahe page. `public/ffmpeg/`, `public/icons/`
-and `dist/` are gitignored build artifacts — always regenerate, never hand-edit.
+and manually exercising the extension against a live animepahe page. `public/ffmpeg/`, `public/icons/`,
+`dist/` and `release/` are gitignored build artifacts — always regenerate, never hand-edit.
 
 [SPEC.md](SPEC.md) is the design record (decision table, as-built notes, risks). Keep it in sync when
 behaviour changes; it documents *why*, this file documents *where*.
+[CONTRIBUTING.md](CONTRIBUTING.md) documents the contributor-facing version of the rules below, plus
+the release process: update `CHANGELOG.md` → `pnpm version x.y.z -m "chore(release): v%s"` →
+`git push --follow-tags`, after which `.github/workflows/release.yml` builds, zips, and publishes a
+GitHub Release (it fails if `CHANGELOG.md` has no section for that version).
 
 ## Architecture
 
