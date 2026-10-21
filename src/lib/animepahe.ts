@@ -1,4 +1,4 @@
-import type { Audio, Episode, KwikSource, Quality } from './types';
+import type { Audio, Episode, KwikSource, Quality, SourceQuality } from './types';
 import type { Fetcher } from './tab-fetch';
 import { decodeEntities } from './html';
 
@@ -90,20 +90,59 @@ export function parsePlaySources(html: string): KwikSource[] {
     const resolution = (tag.match(/data-resolution=["']([^"']+)["']/i)?.[1] || '').replace(/p$/i, '');
     const audioAttr = (tag.match(/data-audio=["']([^"']+)["']/i)?.[1] || 'jpn').toLowerCase();
     const audio: Audio = audioAttr.startsWith('eng') ? 'eng' : 'jpn';
-    if (!['360', '480', '720', '1080'].includes(resolution)) continue;
-    sources.push({ quality: resolution as Quality, audio, kwikUrl });
+    // Accept any numeric height. A whitelist of the common ladder silently discarded whole
+    // releases (e.g. a 272p movie encode) and surfaced as "no streams parsed".
+    if (!/^\d{2,4}$/.test(resolution)) continue;
+    sources.push({ quality: resolution as SourceQuality, audio, kwikUrl });
   }
   return sources;
 }
 
+/**
+ * Fetch and parse one play page. Returns the raw html alongside the sources: when the parse
+ * comes back empty the caller needs the page itself to say why (see describePlayPage), and
+ * re-fetching to find out would double the load on a host that rate-limits bursts.
+ */
 export async function fetchPlayPage(
   fetchText: Fetcher,
   domain: string,
   animeSession: string,
   episodeSession: string,
-): Promise<KwikSource[]> {
+): Promise<{ html: string; sources: KwikSource[] }> {
   const html = await fetchText(`${base(domain)}/play/${animeSession}/${episodeSession}`);
-  return parsePlaySources(html);
+  return { html, sources: parsePlaySources(html) };
+}
+
+/**
+ * Why did parsePlaySources() come back empty? The regex is the highest-drift code in the app,
+ * so a zero-source result is ambiguous between "markup changed", "Cloudflare interstitial" and
+ * "episode genuinely has no streams". Reduce the page to a few markers that tell those apart;
+ * the string goes into the popup error and the log, never the whole page.
+ */
+export function describePlayPage(html: string): string {
+  const marks = [
+    `len=${html.length}`,
+    `resolutionMenu=${/resolutionMenu/i.test(html)}`,
+    `data-src=${(html.match(/\bdata-src=/gi) || []).length}`,
+    `kwik=${(html.match(/kwik\./gi) || []).length}`,
+    `button=${(html.match(/<button\b/gi) || []).length}`,
+  ];
+  // Only an actual interstitial counts: the challenge-platform script tag ships on every
+  // normal animepahe page, so matching it reports Cloudflare on pages that loaded fine.
+  if (/cf-browser-verification|Just a moment|cf_chl_opt/i.test(html)) marks.push('cloudflare=true');
+  const title = html.match(/<title>\s*(.*?)\s*<\/title>/i)?.[1];
+  if (title) marks.push(`title="${title.slice(0, 60)}"`);
+  return marks.join(' ');
+}
+
+/**
+ * The raw markup around the first data-src attribute. When the markers say the menu is there
+ * but parsePlaySources() still found nothing, only the real tag says which attribute moved.
+ */
+export function samplePlayMarkup(html: string): string {
+  const at = html.search(/\bdata-src=/i);
+  if (at < 0) return '(no data-src in page)';
+  return html.slice(Math.max(0, at - 220), at + 220).replace(/\s+/g, ' ');
 }
 
 /** Pick the best source for a target quality/audio, falling back to nearest quality. */

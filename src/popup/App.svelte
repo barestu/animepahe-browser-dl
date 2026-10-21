@@ -1,6 +1,13 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { getAnimeTitle, getEpisodeList, fetchPlayPage, pickSource } from '@/lib/animepahe';
+  import {
+    getAnimeTitle,
+    getEpisodeList,
+    fetchPlayPage,
+    describePlayPage,
+    samplePlayMarkup,
+    pickSource,
+  } from '@/lib/animepahe';
   import { tabFetcher, type Fetcher } from '@/lib/tab-fetch';
   import { matchTab, type TabMatch } from '@/lib/match';
   import { logsToText, remoteLogger, getLogs, clearLogs } from '@/lib/logger';
@@ -114,14 +121,28 @@
     error = '';
     const picks: Pick[] = [];
     const missed: string[] = [];
+    let sampled = false;
     // Resolve each episode's kwik link first-party here; the SW can't fetch animepahe.
     // One failure doesn't abort the batch — collect and report.
     for (const ep of chosen) {
       try {
-        const sources = await fetchPlayPage(fetchText, domain, ep.animeSession, ep.episodeSession);
+        const { html, sources } = await fetchPlayPage(fetchText, domain, ep.animeSession, ep.episodeSession);
         const src = pickSource(sources, quality, audio);
-        if (src) picks.push({ episode: ep, quality: src.quality, audio: src.audio, kwikUrl: src.kwikUrl });
-        else missed.push(ep.episodeNumber);
+        if (src) {
+          picks.push({ episode: ep, quality: src.quality, audio: src.audio, kwikUrl: src.kwikUrl });
+        } else {
+          // parsePlaySources() is the first thing to break when animepahe reskins the play page.
+          // The error line stays short (a 50-episode batch would otherwise be unreadable); the
+          // markers and one markup sample go to the log, which is what gets pasted into a report.
+          plog(`no sources ep ${ep.episodeNumber}`, describePlayPage(html));
+          if (!sampled) {
+            // One sample per batch: every failure in a batch has the same cause, and the log is a
+            // capped ring buffer — 50 dumps would evict everything else in it.
+            sampled = true;
+            plog('play markup sample', samplePlayMarkup(html));
+          }
+          missed.push(`${ep.episodeNumber} (no streams parsed — see log)`);
+        }
       } catch (e) {
         const reason = e instanceof Error ? e.message : String(e);
         plog(`resolve failed ep ${ep.episodeNumber}`, reason);

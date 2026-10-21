@@ -141,6 +141,11 @@ Caveats:
 1. **(popup, pre-enqueue)** Fetch play page `/play/<anime>/<episode>` in-tab → regex-parse
    per-quality kwik links (`button[data-src]` + `data-resolution`/`data-audio`) → pick target
    quality/audio (fallback to nearest). Result stored as the job's `kwikUrl`.
+   Any numeric `data-resolution` is accepted, not a ladder whitelist: movie/fansub encodes list
+   off-ladder heights (a 272p release parsed as zero sources until this was widened). `Quality`
+   is the user's *request*; `SourceQuality` (a plain string) is what the page actually offered.
+   On an empty parse the popup logs `describePlayPage()` markers plus one `samplePlayMarkup()`
+   dump per batch, so drift reports carry the real tag instead of just an episode number.
 2. Batch start: DNR **kwik-nav rule** sets `Referer`+`Origin: https://<animepahe-domain>/` on kwik
    navigations (kwik's Cloudflare only allows the embed when Referer is animepahe).
 3. Open the job's kwik URL in a background tab (`chrome.tabs.create {active:false}`).
@@ -231,7 +236,8 @@ Personal unpacked tool, but tighten these:
   need concurrency 1–2.
 - **1080p memory peak** (~500MB–1GB) in offscreen → OOM. Mitigation path: OPFS streaming (deferred).
 - **Markup drift** breaks the play-page regex parse (`button[data-src]` etc.) — the highest-drift
-  point; m3u8 itself is captured by real-tab sniff so it's insulated from kwik JS obfuscation changes.
+  point; a zero-source parse is self-diagnosing (markers + markup sample in the log) because the
+  failure is otherwise indistinguishable from a Cloudflare page or a release with no streams; m3u8 itself is captured by real-tab sniff so it's insulated from kwik JS obfuscation changes.
 - **Cross-domain cf_clearance:** the working domain follows the active tab; opening a different
   animepahe TLD than the one you cleared could still 403 until that tab passes Cloudflare.
 

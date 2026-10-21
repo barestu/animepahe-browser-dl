@@ -1,6 +1,14 @@
 // Shared types across popup / service-worker / offscreen. Single source of truth for messaging.
 
+/** The quality ladder the user can ask for in settings. */
 export type Quality = '360' | '480' | '720' | '1080';
+/**
+ * The resolution a play page actually offers. NOT the ladder above: movies and some fansub
+ * encodes list off-ladder heights (272, 576, …), and whitelisting the four common ones made
+ * every such release parse as "no sources". Any numeric height is valid; pickSource() maps the
+ * user's Quality onto the nearest one available.
+ */
+export type SourceQuality = string;
 export type Audio = 'jpn' | 'eng';
 
 export interface Episode {
@@ -12,7 +20,7 @@ export interface Episode {
 
 /** A resolved download source for one quality/audio variant, parsed from the play page. */
 export interface KwikSource {
-  quality: Quality;
+  quality: SourceQuality;
   audio: Audio;
   kwikUrl: string; // https://kwik.si/e/<id>
 }
@@ -29,7 +37,7 @@ export type JobStage =
 export interface Job {
   id: string;
   episode: Episode;
-  quality: Quality;
+  quality: SourceQuality;
   audio: Audio;
   kwikUrl: string; // resolved in the popup (first-party) at enqueue time
   stage: JobStage;
@@ -43,7 +51,7 @@ export interface Job {
 /** A fully-resolved download request handed from popup to service worker. */
 export interface Pick {
   episode: Episode;
-  quality: Quality;
+  quality: SourceQuality;
   audio: Audio;
   kwikUrl: string;
 }
