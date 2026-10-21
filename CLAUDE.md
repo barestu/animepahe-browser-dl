@@ -11,16 +11,30 @@ pnpm dev          # same prep, then vite with crxjs HMR (still load dist/)
 pnpm check        # svelte-check (type-checks .svelte; tsc alone does not)
 pnpm copy:ffmpeg  # refresh public/ffmpeg/ from node_modules/@ffmpeg/core
 pnpm gen:icons    # rasterize design/icon.svg -> public/icons/*.png (sharp)
+pnpm zip          # pack dist/ -> release/animepahe-browser-dl-v<version>.zip (contents at zip root)
+pnpm release:notes # draft a CHANGELOG section from commits since the last tag
 ```
 
 Load in Chrome: `chrome://extensions` → Developer mode → **Load unpacked** → `dist/`.
+Requires Chrome 116+ (`minimum_chrome_version`: offscreen + `declarativeNetRequestWithHostAccess`).
+
+`vite.config.ts` defines `__APP_VERSION__` / `__BUILD_TIME__`; the popup header renders them, which
+is the only way to tell which build is actually loaded after an HMR session.
+
+**`package.json` is the only place the version lives** — `src/manifest.config.ts` reads it from
+there, so the manifest and the popup header can never disagree. Never hardcode a version in the
+manifest config.
 
 There is **no test framework**. Verification is `pnpm build` (which runs `tsc --noEmit`), `pnpm check`,
-and manually exercising the extension against a live animepahe page. `public/ffmpeg/`, `public/icons/`
-and `dist/` are gitignored build artifacts — always regenerate, never hand-edit.
+and manually exercising the extension against a live animepahe page. `public/ffmpeg/`, `public/icons/`,
+`dist/` and `release/` are gitignored build artifacts — always regenerate, never hand-edit.
 
 [SPEC.md](SPEC.md) is the design record (decision table, as-built notes, risks). Keep it in sync when
 behaviour changes; it documents *why*, this file documents *where*.
+[CONTRIBUTING.md](CONTRIBUTING.md) documents the contributor-facing version of the rules below, plus
+the release process: update `CHANGELOG.md` → `pnpm version x.y.z -m "chore(release): v%s"` →
+`git push --follow-tags`, after which `.github/workflows/release.yml` builds, zips, and publishes a
+GitHub Release (it fails if `CHANGELOG.md` has no section for that version).
 
 ## Architecture
 
@@ -35,7 +49,14 @@ violating it is the most common way to break this codebase.
 | Content script | [src/content/kwik.ts](src/content/kwik.ts) | force `play()` on kwik | anything else (kwik hosts only) |
 
 Messaging contracts are the single source of truth in [src/lib/types.ts](src/lib/types.ts)
-(`PopupMsg`, `OffscreenMsg`, `OffscreenReply`, `AppState`, `Job`). Add a message there first.
+(`PopupMsg`, `OffscreenMsg`, `OffscreenReply`, `AppState`, `Job`, `Settings`). Add a message there
+first.
+
+Shared across contexts: [lib/settings.ts](src/lib/settings.ts) (the `settings` storage key, always
+spread over `DEFAULT_SETTINGS` on read), [lib/match.ts](src/lib/match.ts), [lib/naming.ts](src/lib/naming.ts),
+[lib/logger.ts](src/lib/logger.ts), [lib/control.ts](src/lib/control.ts).
+[background/badge.ts](src/background/badge.ts) paints the per-tab icon/badge from `matchTab()` —
+derived state only, it persists nothing and never touches the queue.
 
 ### Two Cloudflare workarounds that constrain everything
 
@@ -109,7 +130,15 @@ popup send entries to the SW, which is the sole collector. The popup tails it vi
   at runtime.
 - Pass ffmpeg core as `chrome-extension://` URLs, never blob URLs: MV3 CSP allows `'self'`, not `blob:`.
 - Highest-drift code is `parsePlaySources()` and the kwik selectors — update those first when
-  animepahe/kwik change their markup.
+  animepahe/kwik change their markup. Its two diagnostics, `describePlayPage()` (page markers:
+  length, `resolutionMenu`, `data-src` count, Cloudflare interstitial, `<title>`) and
+  `samplePlayMarkup()` (one ±220-char window around the first `data-src`), are what the popup logs
+  on a parse miss — one sample per batch, because the log is a capped ring buffer.
+- `Quality` (the 360/480/720/1080 ladder the user picks) and `SourceQuality` (`string` — whatever
+  height a play page actually lists) are deliberately different types. Movies and some fansub
+  encodes ship off-ladder heights, so **never** whitelist resolutions when parsing; `pickSource()`
+  maps the user's `Quality` onto the nearest available `SourceQuality`, and `Job.quality` carries
+  the real one through to the filename.
 - Filenames: always go through `buildFilename()` ([lib/naming.ts](src/lib/naming.ts)) — titles are
   page-controlled, and it sanitizes per path segment as the traversal guard.
 - "Is this tab usable?" has exactly one implementation, `matchTab()` ([lib/match.ts](src/lib/match.ts)),

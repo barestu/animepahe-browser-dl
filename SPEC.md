@@ -1,6 +1,5 @@
 # animepahe-browser-dl — Design Spec
 
-Browser-extension port of [barestu/animepahe-downloader](https://github.com/barestu/animepahe-downloader).
 Batch-download anime episodes from an open animepahe anime page. Uses the real browser, so
 Cloudflare challenges are passed normally by the user's own session (no cookie-reuse hack needed).
 
@@ -204,7 +203,7 @@ Caveats:
 - OPFS/IndexedDB streaming assembly (lower peak RAM for large 1080p).
 - Multithread ffmpeg core (needs SAB + COOP/COEP).
 - `.ts` fast-path (skip remux).
-- Firefox port.
+- Firefox support.
 
 ## Security
 

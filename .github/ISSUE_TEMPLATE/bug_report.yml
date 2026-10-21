@@ -1,0 +1,65 @@
+name: Bug report
+description: Something broke — a download failed, the popup is wrong, the icon never turns green.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        animepahe and kwik change their markup without warning, and when they do the
+        **log panel output is the only thing that identifies which part broke**. Please
+        include it — a report without it usually cannot be acted on.
+
+  - type: input
+    id: version
+    attributes:
+      label: Extension version
+      description: Shown in the popup header, e.g. `v1.0.0 · built 2026-10-21 14:02`.
+      placeholder: v1.0.0
+    validations:
+      required: true
+
+  - type: input
+    id: chrome
+    attributes:
+      label: Chrome / Chromium version
+      description: From `chrome://version` (first line). Must be 116 or newer.
+      placeholder: Chrome 142.0.7444.60 on Windows 11
+    validations:
+      required: true
+
+  - type: input
+    id: url
+    attributes:
+      label: Anime page URL
+      description: The animepahe page you had open, e.g. `https://animepahe.ru/anime/<id>`.
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log panel output
+      description: >
+        Open the popup, expand the log panel, hit copy, and paste here. Redact anything
+        you consider private — the log can contain anime titles and animepahe URLs.
+      render: text
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Before submitting
+      options:
+        - label: I am running an unpacked build (from a release zip or from source) on Chrome 116+.
+          required: true
+        - label: I reproduced this on the latest release.
+          required: false

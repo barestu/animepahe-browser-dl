@@ -1,0 +1,66 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write # needed to create the Release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so the changelog tooling can see previous tags
+
+      # Guard first, before spending time on a build: a tag that disagrees with
+      # package.json would ship a manifest claiming a different version than the tag,
+      # which makes every bug report ambiguous.
+      - name: Verify tag matches package.json version
+        id: version
+        run: |
+          pkg_version="$(node -p "require('./package.json').version")"
+          if [ "$GITHUB_REF_NAME" != "v${pkg_version}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match package.json version ${pkg_version}"
+            exit 1
+          fi
+          echo "version=${pkg_version}" >> "$GITHUB_OUTPUT"
+
+      # Fail before building if the release notes do not exist yet.
+      - name: Extract release notes from CHANGELOG.md
+        run: node scripts/changelog.mjs extract "${{ steps.version.outputs.version }}" > release-notes.md
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm check
+
+      - run: pnpm build
+
+      - name: Pack dist/ into a zip
+        run: pnpm zip
+
+      # gh is preinstalled on the runner and uses the built-in GITHUB_TOKEN, so the
+      # release path pulls in no third-party action — consistent with this project's
+      # refusal to widen its supply-chain surface.
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          prerelease=""
+          case "$GITHUB_REF_NAME" in
+            *-*) prerelease="--prerelease" ;;   # v1.1.0-beta.1 and friends
+          esac
+          gh release create "$GITHUB_REF_NAME" \
+            release/*.zip \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file release-notes.md \
+            $prerelease
